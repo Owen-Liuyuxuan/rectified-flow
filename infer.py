@@ -5,6 +5,13 @@ import cv2
 import os
 import numpy as np
 
+CFM = True
+
+## Rectified Flow
+## x_t  = x_t + (x_1 - x_0) * dt
+## CFM:
+## x_t = x_t + (x_t - x_0) / (t) * dt
+
 
 def infer(
         checkpoint_path,
@@ -69,7 +76,7 @@ def infer(
             if y is not None:
                 y_i = y[i].unsqueeze(0)
 
-            for j in range(step):
+            for j in range(1, step):
                 if j % 10 == 0:
                     print(f'Generating {i}th image, step {j}...')
                 t = j * dt
@@ -81,6 +88,12 @@ def infer(
                     # 为什么用score推导的公式放到预测向量场v的情形可以直接用？ SDE ODE
                     v_pred_uncond = model(x=x_t, t=t)
                     v_pred_cond = model(x=x_t, t=t, y=y_i)
+
+                    ## CFM:
+                    ## v = (x_t - v) / ( 1 - t )
+                    if CFM:
+                        v_pred_uncond = - (v_pred_uncond - x_t) / (t)
+                        v_pred_cond = - (v_pred_cond - x_t) / (t)
                     v_pred = v_pred_uncond + cfg_scale * (v_pred_cond -
                                                           v_pred_uncond)
                 else:
@@ -111,7 +124,7 @@ if __name__ == '__main__':
     for i in range(10):
         y.extend([i] * 10)
     # v1.1 1-RF
-    infer(checkpoint_path='./checkpoints/v1.1-cfg/miniunet_49.pth',
+    infer(checkpoint_path='./checkpoints/v1.1-cfg/miniunet_20.pth',
           base_channels=64,
           step=2,
           num_imgs=100,
@@ -120,12 +133,12 @@ if __name__ == '__main__':
           save_path='./results/cfg',
           device='cuda')
 
-    # v1.2 2-RF
-    infer(checkpoint_path='./checkpoints/v1.2-reflow-cfg/miniunet_19.pth',
-          base_channels=64,
-          step=2,
-          num_imgs=100,
-          y=torch.tensor(y),
-          cfg_scale=5.0,
-          save_path='./results/reflow-cfg',
-          device='cuda')
+    # # v1.2 2-RF
+    # infer(checkpoint_path='./checkpoints/v1.2-reflow-cfg/miniunet_19.pth',
+    #       base_channels=64,
+    #       step=2,
+    #       num_imgs=100,
+    #       y=torch.tensor(y),
+    #       cfg_scale=5.0,
+    #       save_path='./results/reflow-cfg',
+    #       device='cuda')

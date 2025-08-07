@@ -288,23 +288,23 @@ class MiniUnet(nn.Module):
         """前向传播函数
 
         Args:
-            x (torch.Tensor): 输入数据，维度为[B, C, H, W]
+            x (torch.Tensor): 输入数据，维度为[B, C, H, W] -- gaussian blurred image
             t (torch.Tensor): 时间，维度为[B]
             y (torch.Tensor, optional): 数据标签（每一个标签是一个类别int型）或text文本（下一版本支持）,维度为[B]或[B, L]。 Defaults to None.
         """
-        # x:(B, C, H, W)
-        # 时间编码加上
+        # x:(B, C, H, W) # [2 *B, 64, 28, 28] 
+        # 时间编码加上 
         x = self.conv_in(x)
-        # 时间编码
+        # 时间编码 # encoding the time continuous variable (0~1)
         temb = self.time_emb(t, self.base_channels)
         # 这里注意，我们把temb和labelemb加起来，作为一个整体的temb输入到MiniUnet中，让模型进行感知！二者编码维度一样，可以直接相加！就把label的条件信息融入进去了！
         if y is not None:
             # 判断y是label还是token
             if len(y.shape) == 1:
                 # label编码，-1表示无条件生成，仅用于训练区分，推理的时候不需要
-                # 把y中等于-1的部分找出来不进行任何编码，其余的进行编码
+                # 把y中等于-1的部分找出来不进行任何编码，其余的进行编码 ## encoding the label variable --- otherwise we need another classifier
                 yemb = self.label_emb(y, self.base_channels)
-                # 把y等于-1的index找出来，然后把对应的y_emb设置为0
+                # 把y等于-1的index找出来，然后把对应的y_emb设置为0 ## In inference there is no variable -- some data will keep without label for data augmentation
                 yemb[y == -1] = 0.0
                 temb += yemb
             else:  # 文字版本

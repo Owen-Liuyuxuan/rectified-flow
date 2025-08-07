@@ -48,7 +48,7 @@ class RectifiedFlow:
         return x_t, x_0
 
     # 司机
-    def mse_loss(self, v, x_1, x_0):
+    def mse_loss(self, v, x_1, x_0, cfm=False):
         """ 计算RectifiedFlow的损失函数
         L = MSE(x_1 - x_0 - v(t))  匀速直线运动
 
@@ -60,8 +60,14 @@ class RectifiedFlow:
 
         # 求loss函数，是一个MSE，最后维度是[B]
 
-        loss = F.mse_loss(x_1 - x_0, v)
+        if cfm:
+            loss = F.mse_loss(v, x_0)
+        else:
+            loss = F.mse_loss(x_1 - x_0, v)
         # loss = torch.mean((x_1 - x_0 - v)**2)
+
+        ## CFM loss
+        ## loss = F.mse_loss(v, x_0)
 
         return loss
 

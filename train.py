@@ -9,6 +9,92 @@ from torch.optim import Adam, AdamW
 from torch.optim.lr_scheduler import StepLR
 from rectified_flow import RectifiedFlow
 
+"""
+We assume a uniform linear path and express 
+
+x_t = (1 - t) * x_1 + t * x_0
+
+then the velocity is 
+
+v = dx_t/dt = x_0 - x_1 --- Which becomes the network expected prediction to be trained. During revert, we simulate using -v = x_1 - x_0
+
+-------
+
+Generally speaking
+
+x_t = a(t) * x_1 + b_t * x_0. With marginal requirement of a_0 = 1, b_0 = 0 & a_1 = 0, b_1 = 1.
+
+v = dx_t/dt = a'(t) * x_1 + b'(t) * x_0 = u
+
+-------
+
+Then in conditional flow matching, we define 
+
+loss = ||  v_\theta(z, t) - u_t(x_t|\epsilon) ||2
+
+In order to convert u_t without boundaries:
+
+1. x_1_expected = (x_t - b(t) * x_0) / a(t)
+2. v = a'(t) * x_1_expected + b'(t) * x_0 = a'(t) / a(t) x_t - \
+        x_0 * b(t)( a'(t)/a(t) - b'(t) / b(t))
+3. signal_to_noise ratio  \lambda(t) = 2 ln (a(t)/b(t))  \lambda'(t) = 2 a'(t)/ a(t) - 2 b'(t) / b(t)
+4. v_expect = a'(t)/a(t) * x_t  - b(t)/2 \lambda'(t) * x_0
+5. loss = || v\theta(z,t) - v_expect  || = || v\theta(z,t) - a'(t)/a(t) * x_t  + b(t) / 2 \lambda'(t) * x_0  ||2
+        = (-bt/2 \lambda'(t))^2 || \epsilon\theta(z, t) - x_0 ||
+
+    \epsilon\theta(x(t), t) = (-2) / (\lambda'(t)b(t)) (v - a'(t)/a(t) * x_t) 
+            --- This can be the network taking noisy input (x_t) and time embedding to learned
+
+    In inference, we can restore v = \epsilon\theta(x(t), t) *(\lambda'(t) b(t)) / (-2) + a'(t)/a(t) * x_t
+
+------ 
+Back to example of conditional flow matching.
+
+1. we can train a network, taking noisy input x(t), time embedding t to learn the correct x_0
+2. During inference:
+    v_base = model(x_t, t)
+    v = v_base  * \lambda'(t) * b(t) / (-2) + a'(t) / a(t) * x_t
+       = v_base * 1 /  (1 - t) - 1 / (1 - t) * x_t
+      = (v_base - x_t) / (1 - t)
+
+3. 1 / t is only the size of the direction, which is rather sensitive to the time step, it is rather common to regularize it.
+   to v = (x_t - v_base)
+    We point out that in training v_base converge to the correct x_0, so v = x_t - v_base ~ x_t - x_0, 
+    This CFM aligned with the motion of the base rectified flow.
+
+-------
+
+There are many motion functions
+
+Rectified flow: 
+x_t = t * x_1 + (1 - t) * x_0
+
+Cosine:
+x_t = cos(t * pi / 2) * x_1 + sin(t * pi / 2) * x_0
+
+LDM-Linear for modified DDPM:
+It means the gaussian noise is increasing linearly from x_0 to x_1, while preserving  b(t)^2 + a(t)^2 = 1
+
+a(t) = \sqrt( (1-\beta_0) * (1 - \beta_1) * (1 - \beta_2) * .... * (1 - \beta_t))
+b(t) = \sqrt(1 - a(t)^2)
+
+DDPM: \beta_t = \beta_0 + t/(T-1) (\beta_{T-1} - \beta_0)
+LDM:  \beta_t = (\sqrt(\beta_0) + t/(T-1) * \sqrt(\beta_{T-1}))
+
+This link back to the diffusion process on the forward processing with diffusion schedules.
+
+-------
+a**2 = (1 - beta_0) * (1 - beta_1) * (1 - beta_2) * .... * (1 - beta_t)
+2a * a' = (1 - beta_0) * (1 - beta_1) * (1 - beta_2) * .... * (1 - beta_t_1) * ( - beta_t)
+
+a'(t) = (1 - beta_0) * (1 - beta_1) * (1 - beta_2) * .... * (1 - beta_t_1) * (- beta_t) / 2 * a(t)
+b(t) ** 2 = 1 - a ** 2
+2 * b(t) b'(t) = 1 - 2 * a(t) * a'(t) = 1 - (1 - beta_0) * (1 - beta_1) * (1 - beta_2) * .... * (1 - beta_t_1) * ( - beta_t)
+b'(t) = [1 - 2 * a(t) * a'(t) = 1 - (1 - beta_0) * (1 - beta_1) * (1 - beta_2) * .... * (1 - beta_t_1) * ( - beta_t) ]  / (2 * b(t))
+
+
+"""
+
 
 def train(config: str):
     """训练flow matching模型
@@ -38,6 +124,7 @@ def train(config: str):
     save_path = config.get('save_path', './checkpoints')
     use_cfg = config.get('use_cfg', False)
     device = config.get('device', 'cuda')
+    cfm = config.get("cfm", False)
 
     # 打印训练参数
     print('Training config:')
@@ -90,7 +177,7 @@ def train(config: str):
             # 均匀采样[0, 1]的时间t randn 标准正态分布
             t = torch.rand(x_1.size(0))
 
-            # 生成flow（实际上是一个点）
+            # 生成flow（实际上是一个点） # adding gaussian noise to x_1 to x_t, where x_0 is pure gaussian noise
             x_t, x_0 = rf.create_flow(x_1, t)
 
             # 4090 大概占用显存3G
@@ -102,7 +189,7 @@ def train(config: str):
             optimizer.zero_grad()
 
             # 这里我们要做一个数据的复制和拼接，复制原始x_1，把一半的y替换成-1表示无条件生成，这里也可以直接有条件、无条件累计两次计算两次loss的梯度
-            # 一定的概率，把有条件生成换为无条件的 50%的概率 [x_t, x_t] [t, t]
+            # 一定的概率，把有条件生成换为无条件的 50%的概率 [x_t, x_t] [t, t] ## attached on batch dimension
             if use_cfg:
                 x_t = torch.cat([x_t, x_t.clone()], dim=0)
                 t = torch.cat([t, t.clone()], dim=0)
@@ -113,9 +200,10 @@ def train(config: str):
             else:
                 y = None
 
+
             v_pred = model(x=x_t, t=t, y=y)
 
-            loss = rf.mse_loss(v_pred, x_1, x_0)
+            loss = rf.mse_loss(v_pred, x_1, x_0, cfm=cfm)
 
             loss.backward()
             optimizer.step()
