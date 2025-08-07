@@ -1,3 +1,17 @@
+# Rectified Flow Enhanced with Conditional Flow Matching
+
+Based on the code from the original author, I included some modification and documentations for creating diffusion from the perspective of conditional flow matching.
+
+The equations follow the paper:
+[Statble Diffusion 3](https://arxiv.org/pdf/2403.03206)
+
+It has a slightly different network output compared to the original rectified flow model.
+
+Instead of outputing $v_\theta$, it outputs $\epsilon_\theta$, and therefore inference code also changes.
+
+However, based on the computation/documentation on `train.py`, these two methods are fundamentally the same, we simply prove that we can basically do the same thing using new network output definition while keeping most of the performance.
+
+
 # 从零手搓Flow Matching（Rectified Flow）
 
 作者：Tong Tong 
